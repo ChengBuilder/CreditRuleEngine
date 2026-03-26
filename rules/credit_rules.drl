@@ -1,0 +1,324 @@
+package org.example.rules;
+
+import org.example.Application;
+import org.example.RuleConfig;
+
+// =========================================================
+// 规则分层说明
+// 1) 硬拒绝层：命中即拒绝，优先级最高（salience 100 / 95）
+// 2) 评分层：累计风险分（加分=风险上升，减分=风险下降）
+// 3) 决策层：根据最终风险分落入 APPROVED / MANUAL_REVIEW / REJECTED
+//
+// 关键约束：
+// - 所有规则都要求 status == "PENDING"（避免已决策数据重复处理）
+// - 评分/决策规则使用 hasRuleFired + markRuleFired 防止 update 循环触发
+// =========================================================
+
+// -------------------- 硬拒绝层 --------------------
+
+// 年龄小于最小准入年龄：直接拒绝
+rule "HardReject_AgeBelowMin"
+salience 100
+when
+    $cfg : RuleConfig()
+    $app : Application(status == "PENDING", age < $cfg.minAge)
+then
+    $app.reject("AGE_LT_MIN");
+    update($app);
+end
+
+// 命中设备黑名单：直接拒绝
+rule "HardReject_BlacklistedDevice"
+salience 100
+when
+    $app : Application(status == "PENDING", blacklistedDevice == true)
+then
+    $app.reject("BLACKLISTED_DEVICE");
+    update($app);
+end
+
+// 90 天严重逾期次数达到阈值：直接拒绝
+rule "HardReject_SevereDelinquency"
+salience 100
+when
+    $cfg : RuleConfig()
+    $app : Application(status == "PENDING", pastDue90dCount >= $cfg.severeDelinquency90dRejectCount)
+then
+    $app.reject("SEVERE_DELINQUENCY_90D");
+    update($app);
+end
+
+// 高风险 IP 且近期查询次数过高：视为强欺诈信号，直接拒绝
+rule "HardReject_HighFraudSignal"
+salience 95
+when
+    $cfg : RuleConfig()
+    $app : Application(
+        status == "PENDING",
+        ipRiskLevel == "HIGH",
+        recentInquiryCount >= $cfg.highRiskInquiryRejectCount
+    )
+then
+    $app.reject("HIGH_FRAUD_SIGNAL");
+    update($app);
+end
+
+// -------------------- 评分层（信用分） --------------------
+
+rule "Score_CreditScoreVeryLow"
+when
+    $cfg : RuleConfig()
+    $app : Application(status == "PENDING", creditScore < $cfg.creditScoreVeryLowUpper)
+    eval(!$app.hasRuleFired("Score_CreditScoreVeryLow"))
+then
+    $app.markRuleFired("Score_CreditScoreVeryLow");
+    $app.addRiskScore($cfg.getScoreCreditVeryLow(), "creditScore < veryLowUpper");
+    update($app);
+end
+
+rule "Score_CreditScoreLow"
+when
+    $cfg : RuleConfig()
+    $app : Application(
+        status == "PENDING",
+        creditScore >= $cfg.creditScoreVeryLowUpper,
+        creditScore < $cfg.creditScoreLowUpper
+    )
+    eval(!$app.hasRuleFired("Score_CreditScoreLow"))
+then
+    $app.markRuleFired("Score_CreditScoreLow");
+    $app.addRiskScore($cfg.getScoreCreditLow(), "veryLowUpper <= creditScore < lowUpper");
+    update($app);
+end
+
+rule "Score_CreditScoreMedium"
+when
+    $cfg : RuleConfig()
+    $app : Application(
+        status == "PENDING",
+        creditScore >= $cfg.creditScoreLowUpper,
+        creditScore < $cfg.creditScoreMediumUpper
+    )
+    eval(!$app.hasRuleFired("Score_CreditScoreMedium"))
+then
+    $app.markRuleFired("Score_CreditScoreMedium");
+    $app.addRiskScore($cfg.getScoreCreditMedium(), "lowUpper <= creditScore < mediumUpper");
+    update($app);
+end
+
+rule "Score_CreditScoreExcellent"
+when
+    $cfg : RuleConfig()
+    $app : Application(status == "PENDING", creditScore >= $cfg.creditScoreExcellentMin)
+    eval(!$app.hasRuleFired("Score_CreditScoreExcellent"))
+then
+    $app.markRuleFired("Score_CreditScoreExcellent");
+    $app.addRiskScore($cfg.getScoreCreditExcellentBonus(), "creditScore >= excellentMin");
+    update($app);
+end
+
+// -------------------- 评分层（负债与工作稳定性） --------------------
+
+rule "Score_DebtToIncomeHigh"
+when
+    $cfg : RuleConfig()
+    $app : Application(status == "PENDING", debtToIncomeRatio > $cfg.dtiHighThreshold)
+    eval(!$app.hasRuleFired("Score_DebtToIncomeHigh"))
+then
+    $app.markRuleFired("Score_DebtToIncomeHigh");
+    $app.addRiskScore($cfg.getScoreDtiHigh(), "debtToIncomeRatio > highThreshold");
+    update($app);
+end
+
+rule "Score_DebtToIncomeMedium"
+when
+    $cfg : RuleConfig()
+    $app : Application(
+        status == "PENDING",
+        debtToIncomeRatio > $cfg.dtiMediumThreshold,
+        debtToIncomeRatio <= $cfg.dtiHighThreshold
+    )
+    eval(!$app.hasRuleFired("Score_DebtToIncomeMedium"))
+then
+    $app.markRuleFired("Score_DebtToIncomeMedium");
+    $app.addRiskScore($cfg.getScoreDtiMedium(), "mediumThreshold < debtToIncomeRatio <= highThreshold");
+    update($app);
+end
+
+rule "Score_ThinEmploymentHistory"
+when
+    $cfg : RuleConfig()
+    $app : Application(status == "PENDING", employmentMonths < $cfg.thinEmploymentMonthsUpper)
+    eval(!$app.hasRuleFired("Score_ThinEmploymentHistory"))
+then
+    $app.markRuleFired("Score_ThinEmploymentHistory");
+    $app.addRiskScore($cfg.getScoreThinEmployment(), "employmentMonths < thinEmploymentUpper");
+    update($app);
+end
+
+rule "Score_ShortEmploymentHistory"
+when
+    $cfg : RuleConfig()
+    $app : Application(
+        status == "PENDING",
+        employmentMonths >= $cfg.thinEmploymentMonthsUpper,
+        employmentMonths < $cfg.shortEmploymentMonthsUpper
+    )
+    eval(!$app.hasRuleFired("Score_ShortEmploymentHistory"))
+then
+    $app.markRuleFired("Score_ShortEmploymentHistory");
+    $app.addRiskScore($cfg.getScoreShortEmployment(), "thinEmploymentUpper <= employmentMonths < shortEmploymentUpper");
+    update($app);
+end
+
+// -------------------- 评分层（行为与逾期） --------------------
+
+rule "Score_InquirySpike"
+when
+    $cfg : RuleConfig()
+    $app : Application(status == "PENDING", recentInquiryCount >= $cfg.inquirySpikeCount)
+    eval(!$app.hasRuleFired("Score_InquirySpike"))
+then
+    $app.markRuleFired("Score_InquirySpike");
+    $app.addRiskScore($cfg.getScoreInquirySpike(), "recentInquiryCount >= inquirySpikeCount");
+    update($app);
+end
+
+rule "Score_TooManyExistingLoans"
+when
+    $cfg : RuleConfig()
+    $app : Application(status == "PENDING", existingLoanCount >= $cfg.tooManyLoansCount)
+    eval(!$app.hasRuleFired("Score_TooManyExistingLoans"))
+then
+    $app.markRuleFired("Score_TooManyExistingLoans");
+    $app.addRiskScore($cfg.getScoreTooManyLoans(), "existingLoanCount >= tooManyLoansCount");
+    update($app);
+end
+
+rule "Score_MildDelinquency30d"
+when
+    $cfg : RuleConfig()
+    $app : Application(status == "PENDING", pastDue30dCount >= $cfg.mildDelinquency30dCount)
+    eval(!$app.hasRuleFired("Score_MildDelinquency30d"))
+then
+    $app.markRuleFired("Score_MildDelinquency30d");
+    $app.addRiskScore($cfg.getScoreMildDelinquency30d(), "pastDue30dCount >= mildDelinquency30dCount");
+    update($app);
+end
+
+// -------------------- 评分层（申请负载） --------------------
+
+rule "Score_HighRequestAmountRelativeToIncome"
+when
+    $cfg : RuleConfig()
+    $app : Application(
+        status == "PENDING",
+        income > 0,
+        (requestedAmount / (income * 12.0)) > $cfg.highRequestToIncomeRatio
+    )
+    eval(!$app.hasRuleFired("Score_HighRequestAmountRelativeToIncome"))
+then
+    $app.markRuleFired("Score_HighRequestAmountRelativeToIncome");
+    $app.addRiskScore($cfg.getScoreHighRequestToIncome(), "request/annualIncome > highRequestToIncomeRatio");
+    update($app);
+end
+
+rule "Score_MediumRequestAmountRelativeToIncome"
+when
+    $cfg : RuleConfig()
+    $app : Application(
+        status == "PENDING",
+        income > 0,
+        (requestedAmount / (income * 12.0)) > $cfg.mediumRequestToIncomeRatio,
+        (requestedAmount / (income * 12.0)) <= $cfg.highRequestToIncomeRatio
+    )
+    eval(!$app.hasRuleFired("Score_MediumRequestAmountRelativeToIncome"))
+then
+    $app.markRuleFired("Score_MediumRequestAmountRelativeToIncome");
+    $app.addRiskScore($cfg.getScoreMediumRequestToIncome(), "mediumRatio < request/annualIncome <= highRatio");
+    update($app);
+end
+
+// -------------------- 评分层（优质客群奖励） --------------------
+
+rule "Score_StrongApplicantBonus"
+when
+    $cfg : RuleConfig()
+    $app : Application(
+        status == "PENDING",
+        creditScore >= $cfg.strongApplicantCreditMin,
+        debtToIncomeRatio < $cfg.strongApplicantDtiMax,
+        income >= $cfg.strongApplicantIncomeMin
+    )
+    eval(!$app.hasRuleFired("Score_StrongApplicantBonus"))
+then
+    $app.markRuleFired("Score_StrongApplicantBonus");
+    $app.addRiskScore($cfg.getScoreStrongApplicantBonus(), "strong profile bonus");
+    update($app);
+end
+
+rule "Score_OfflineTrustedChannelBonus"
+when
+    $cfg : RuleConfig()
+    $app : Application(
+        status == "PENDING",
+        channel == "OFFLINE",
+        creditScore >= $cfg.offlineTrustedCreditMin,
+        debtToIncomeRatio < $cfg.offlineTrustedDtiMax
+    )
+    eval(!$app.hasRuleFired("Score_OfflineTrustedChannelBonus"))
+then
+    $app.markRuleFired("Score_OfflineTrustedChannelBonus");
+    $app.addRiskScore($cfg.getScoreOfflineTrustedBonus(), "trusted offline channel bonus");
+    update($app);
+end
+
+// -------------------- 决策层 --------------------
+
+// 风险分达到拒绝阈值：直接拒绝
+rule "Decision_RejectByScore"
+salience -10
+when
+    $cfg : RuleConfig()
+    $app : Application(status == "PENDING", riskScore >= $cfg.rejectScoreThreshold)
+    eval(!$app.hasRuleFired("Decision_RejectByScore"))
+then
+    $app.markRuleFired("Decision_RejectByScore");
+    $app.setStatus("REJECTED");
+    $app.setRejectReason("RISK_SCORE_GE_REJECT_THRESHOLD");
+    $app.addRuleHit("final decision: reject by score");
+    update($app);
+end
+
+// 风险分处于中间区间：进入人工审核
+rule "Decision_ManualReviewByScore"
+salience -10
+when
+    $cfg : RuleConfig()
+    $app : Application(
+        status == "PENDING",
+        riskScore >= $cfg.manualReviewScoreThreshold,
+        riskScore < $cfg.rejectScoreThreshold
+    )
+    eval(!$app.hasRuleFired("Decision_ManualReviewByScore"))
+then
+    $app.markRuleFired("Decision_ManualReviewByScore");
+    $app.setStatus("MANUAL_REVIEW");
+    $app.setManualReviewReason("manualReviewScoreThreshold <= riskScore < rejectScoreThreshold");
+    $app.addRuleHit("final decision: manual review");
+    update($app);
+end
+
+// 风险分低于人审阈值：自动通过
+rule "Decision_ApproveByScore"
+salience -10
+when
+    $cfg : RuleConfig()
+    $app : Application(status == "PENDING", riskScore < $cfg.manualReviewScoreThreshold)
+    eval(!$app.hasRuleFired("Decision_ApproveByScore"))
+then
+    $app.markRuleFired("Decision_ApproveByScore");
+    $app.setStatus("APPROVED");
+    $app.addRuleHit("final decision: auto approved");
+    update($app);
+end
