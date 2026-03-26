@@ -37,12 +37,14 @@ public final class FeatureApplicationMapper {
             FeatureDictionary dictionary,
             String fallbackAppId
     ) {
+        Trace.log("MAPPER", "开始特征映射 rawFeatures=" + Trace.map(rawFeatures));
         // appId 兜底顺序：特征值 -> 入参 fallback -> 随机生成
         String appId = firstNonBlank(
                 dictionary.valueOf(rawFeatures, "app_id"),
                 fallbackAppId,
                 "APP-" + UUID.randomUUID()
         );
+        Trace.log("MAPPER", "字段映射 app_id=" + appId);
 
         // 基础字段
         int age = intVal(rawFeatures, dictionary, "age", 0);
@@ -83,6 +85,7 @@ public final class FeatureApplicationMapper {
         if (gender != null && !gender.isBlank()) {
             app.addRuleHit("feature gender=" + gender);
         }
+        Trace.log("MAPPER", "映射完成 app=" + app);
         return app;
     }
 
@@ -92,12 +95,17 @@ public final class FeatureApplicationMapper {
      */
     private static int intVal(Map<String, String> raw, FeatureDictionary dict, String alias, int defaultValue) {
         String rawValue = dict.valueOf(raw, alias);
+        String code = dict.codeOf(alias);
         if (rawValue == null || rawValue.isBlank()) {
+            Trace.log("MAPPER", "字段 " + alias + "(code=" + code + ") 缺失，使用默认值 " + defaultValue);
             return defaultValue;
         }
         try {
-            return Integer.parseInt(rawValue.trim());
+            int parsed = Integer.parseInt(rawValue.trim());
+            Trace.log("MAPPER", "字段 " + alias + "(code=" + code + ") raw=" + rawValue + " -> int=" + parsed);
+            return parsed;
         } catch (NumberFormatException e) {
+            Trace.log("MAPPER", "字段 " + alias + "(code=" + code + ") raw=" + rawValue + " 非法，使用默认值 " + defaultValue);
             return defaultValue;
         }
     }
@@ -108,12 +116,17 @@ public final class FeatureApplicationMapper {
      */
     private static double doubleVal(Map<String, String> raw, FeatureDictionary dict, String alias, double defaultValue) {
         String rawValue = dict.valueOf(raw, alias);
+        String code = dict.codeOf(alias);
         if (rawValue == null || rawValue.isBlank()) {
+            Trace.log("MAPPER", "字段 " + alias + "(code=" + code + ") 缺失，使用默认值 " + defaultValue);
             return defaultValue;
         }
         try {
-            return Double.parseDouble(rawValue.trim());
+            double parsed = Double.parseDouble(rawValue.trim());
+            Trace.log("MAPPER", "字段 " + alias + "(code=" + code + ") raw=" + rawValue + " -> double=" + parsed);
+            return parsed;
         } catch (NumberFormatException e) {
+            Trace.log("MAPPER", "字段 " + alias + "(code=" + code + ") raw=" + rawValue + " 非法，使用默认值 " + defaultValue);
             return defaultValue;
         }
     }
@@ -126,16 +139,21 @@ public final class FeatureApplicationMapper {
      */
     private static boolean boolVal(Map<String, String> raw, FeatureDictionary dict, String alias, boolean defaultValue) {
         String rawValue = dict.valueOf(raw, alias);
+        String code = dict.codeOf(alias);
         if (rawValue == null || rawValue.isBlank()) {
+            Trace.log("MAPPER", "字段 " + alias + "(code=" + code + ") 缺失，使用默认值 " + defaultValue);
             return defaultValue;
         }
         String normalized = rawValue.trim().toLowerCase();
         if ("1".equals(normalized) || "true".equals(normalized) || "yes".equals(normalized) || "y".equals(normalized)) {
+            Trace.log("MAPPER", "字段 " + alias + "(code=" + code + ") raw=" + rawValue + " -> boolean=true");
             return true;
         }
         if ("0".equals(normalized) || "false".equals(normalized) || "no".equals(normalized) || "n".equals(normalized)) {
+            Trace.log("MAPPER", "字段 " + alias + "(code=" + code + ") raw=" + rawValue + " -> boolean=false");
             return false;
         }
+        Trace.log("MAPPER", "字段 " + alias + "(code=" + code + ") raw=" + rawValue + " 非法，使用默认值 " + defaultValue);
         return defaultValue;
     }
 

@@ -12,6 +12,7 @@ import java.util.Map;
  */
 public class Main {
     public static void main(String[] args) {
+        Trace.log("MAIN", "程序启动，trace=" + Trace.enabled());
         // 打印当前规则版本，便于观察热更新是否生效
         System.out.println("Active rule version: " + DroolsRunner.activeVersion());
         System.out.println("Edit ./rules/credit_rules.drl or ./config/risk-config.properties to hot reload.");
@@ -95,8 +96,11 @@ public class Main {
         );
 
         // 逐条执行并输出最终决策对象（状态、分数、命中轨迹）
-        for (Map<String, String> rawFeatures : featureCases) {
+        for (int i = 0; i < featureCases.size(); i++) {
+            Map<String, String> rawFeatures = featureCases.get(i);
+            Trace.log("MAIN", "开始处理案例 #" + (i + 1) + " rawFeatures=" + Trace.map(rawFeatures));
             Application app = DroolsRunner.fireRulesFromFeatures(rawFeatures);
+            Trace.log("MAIN", "案例 #" + (i + 1) + " 处理完成，结果状态=" + app.getStatus() + ", riskScore=" + app.getRiskScore());
             System.out.println(app);
             System.out.println();
         }

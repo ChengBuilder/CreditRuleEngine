@@ -5,6 +5,8 @@ import org.kie.api.builder.KieBuilder;
 import org.kie.api.builder.KieFileSystem;
 import org.kie.api.builder.Message;
 import org.kie.api.builder.ReleaseId;
+import org.kie.api.event.rule.AfterMatchFiredEvent;
+import org.kie.api.event.rule.DefaultAgendaEventListener;
 import org.kie.api.io.Resource;
 import org.kie.api.runtime.KieContainer;
 import org.kie.api.runtime.KieSession;
@@ -50,6 +52,7 @@ public class HotReloadingRuleEngine {
     public HotReloadingRuleEngine(Path rulePath, Path configPath) {
         this.rulePath = rulePath;
         this.configPath = configPath;
+        Trace.log("ENGINE", "初始化热更新引擎 rulePath=" + rulePath + ", configPath=" + configPath);
         reload("initial-load");
     }
 
@@ -61,12 +64,21 @@ public class HotReloadingRuleEngine {
     public void evaluate(Application app) {
         refreshIfNeeded();
         EngineSnapshot snapshot = snapshotRef.get();
+        Trace.log("ENGINE", "开始执行 appId=" + app.getAppId() + ", activeVersion=" + snapshot.version);
         KieSession session = null;
         try {
             session = snapshot.kieContainer.newKieSession();
+            session.addEventListener(new DefaultAgendaEventListener() {
+                @Override
+                public void afterMatchFired(AfterMatchFiredEvent event) {
+                    Trace.log("RULE", "命中规则: " + event.getMatch().getRule().getName());
+                }
+            });
             session.insert(snapshot.ruleConfig);
             session.insert(app);
-            session.fireAllRules();
+            int fired = session.fireAllRules();
+            Trace.log("ENGINE", "执行完成 appId=" + app.getAppId() + ", firedRules=" + fired
+                    + ", status=" + app.getStatus() + ", riskScore=" + app.getRiskScore());
         } finally {
             // 每次请求结束都释放 session，避免状态污染
             if (session != null) {
@@ -114,6 +126,7 @@ public class HotReloadingRuleEngine {
             }
         }
 
+        Trace.log("ENGINE", "触发重载 reason=" + reason);
         RuleConfig ruleConfig = RuleConfigLoader.load(configPath);
         KieContainer newContainer = buildKieContainer();
         String version = buildVersionTag();
@@ -128,6 +141,9 @@ public class HotReloadingRuleEngine {
 
         this.ruleLastModified = readLastModified(rulePath);
         this.configLastModified = readLastModified(configPath);
+        Trace.log("ENGINE", "重载完成 newVersion=" + version
+                + ", ruleLastModified=" + this.ruleLastModified
+                + ", configLastModified=" + this.configLastModified);
     }
 
     /**
@@ -137,6 +153,7 @@ public class HotReloadingRuleEngine {
     private KieContainer buildKieContainer() {
         KieFileSystem kfs = kieServices.newKieFileSystem();
         ReleaseId releaseId = kieServices.newReleaseId("org.example", "rules", buildVersionTag());
+        Trace.log("ENGINE", "开始编译规则 releaseId=" + releaseId);
         kfs.generateAndWritePomXML(releaseId);
         kfs.write(RULE_RESOURCE_PATH, resolveRuleResource());
 
@@ -145,6 +162,7 @@ public class HotReloadingRuleEngine {
         if (kieBuilder.getResults().hasMessages(Message.Level.ERROR)) {
             throw new IllegalStateException("rule compile failed: " + kieBuilder.getResults());
         }
+        Trace.log("ENGINE", "规则编译成功 releaseId=" + releaseId);
         return kieServices.newKieContainer(releaseId);
     }
 
@@ -155,6 +173,7 @@ public class HotReloadingRuleEngine {
         if (rulePath == null || !Files.exists(rulePath)) {
             throw new IllegalStateException("rule file is required: " + rulePath);
         }
+        Trace.log("ENGINE", "加载外部规则文件: " + rulePath.toAbsolutePath());
         return kieServices.getResources().newFileSystemResource(rulePath.toFile(), "UTF-8");
     }
 

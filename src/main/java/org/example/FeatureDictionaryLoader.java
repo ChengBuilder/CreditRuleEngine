@@ -30,6 +30,7 @@ public final class FeatureDictionaryLoader {
         if (dictionaryPath == null || !Files.exists(dictionaryPath)) {
             throw new IllegalStateException("feature dictionary file is required: " + dictionaryPath);
         }
+        Trace.log("DICT", "加载特征字典文件: " + dictionaryPath.toAbsolutePath());
         try (InputStream in = Files.newInputStream(dictionaryPath)) {
             properties.load(in);
         } catch (IOException e) {
@@ -44,6 +45,7 @@ public final class FeatureDictionaryLoader {
                 aliasToCode.put(alias.trim(), code.trim());
             }
         }
+        Trace.log("DICT", "字典加载完成，别名数量=" + aliasToCode.size());
         return new FeatureDictionary(aliasToCode);
     }
 }

@@ -52,6 +52,7 @@ public class DroolsRunner {
      * 直接执行已构造好的 Application。
      */
     public static void fireRules(Application app) {
+        Trace.log("RUNNER", "直接执行 Application: " + app.getAppId());
         ENGINE.evaluate(app);
     }
 
@@ -71,9 +72,14 @@ public class DroolsRunner {
      * 3. 执行规则并返回决策结果
      */
     public static Application fireRulesFromFeatures(Map<String, String> rawFeatures, String fallbackAppId) {
+        Trace.log("RUNNER", "收到原始特征，开始决策。fallbackAppId=" + fallbackAppId);
+        Trace.log("RUNNER", "原始特征明细: " + Trace.map(rawFeatures));
         FeatureDictionary dictionary = currentFeatureDictionary();
+        Trace.log("RUNNER", "使用特征字典，键数量=" + dictionary.getAliasToCode().size());
         Application app = FeatureApplicationMapper.toApplication(rawFeatures, dictionary, fallbackAppId);
+        Trace.log("RUNNER", "特征已映射为 Application，appId=" + app.getAppId());
         ENGINE.evaluate(app);
+        Trace.log("RUNNER", "规则执行结束，最终状态=" + app.getStatus() + ", riskScore=" + app.getRiskScore());
         return app;
     }
 
@@ -87,6 +93,7 @@ public class DroolsRunner {
      * - 刷新特征字典缓存
      */
     public static void forceReload() {
+        Trace.log("RUNNER", "手动触发强制重载（规则+参数+字典）");
         ENGINE.forceReload();
         synchronized (DroolsRunner.class) {
             FEATURE_DICTIONARY = FeatureDictionaryLoader.load(EXTERNAL_FEATURE_DICT_PATH);
@@ -105,11 +112,13 @@ public class DroolsRunner {
     private static FeatureDictionary currentFeatureDictionary() {
         FileTime now = readLastModified(EXTERNAL_FEATURE_DICT_PATH);
         if (!Objects.equals(now, FEATURE_DICT_LAST_MODIFIED)) {
+            Trace.log("RUNNER", "检测到特征字典文件变化，准备刷新缓存");
             synchronized (DroolsRunner.class) {
                 FileTime latest = readLastModified(EXTERNAL_FEATURE_DICT_PATH);
                 if (!Objects.equals(latest, FEATURE_DICT_LAST_MODIFIED)) {
                     FEATURE_DICTIONARY = FeatureDictionaryLoader.load(EXTERNAL_FEATURE_DICT_PATH);
                     FEATURE_DICT_LAST_MODIFIED = latest;
+                    Trace.log("RUNNER", "特征字典缓存刷新完成，lastModified=" + latest);
                 }
             }
         }

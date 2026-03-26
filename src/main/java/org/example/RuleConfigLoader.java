@@ -30,6 +30,7 @@ public final class RuleConfigLoader {
         if (configPath == null || !Files.exists(configPath)) {
             throw new IllegalStateException("risk config file is required: " + configPath);
         }
+        Trace.log("CONFIG", "加载规则参数文件: " + configPath.toAbsolutePath());
         try (InputStream in = Files.newInputStream(configPath)) {
             properties.load(in);
         } catch (IOException e) {
@@ -40,6 +41,10 @@ public final class RuleConfigLoader {
         apply(properties, config);
         // 统一校验关键阈值关系
         config.validate();
+        Trace.log("CONFIG",
+                "参数加载完成 rejectScoreThreshold=" + config.getRejectScoreThreshold()
+                        + ", manualReviewScoreThreshold=" + config.getManualReviewScoreThreshold()
+                        + ", minAge=" + config.getMinAge());
         return config;
     }
 
